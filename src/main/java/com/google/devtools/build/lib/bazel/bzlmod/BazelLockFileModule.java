@@ -99,31 +99,61 @@ public class BazelLockFileModule extends BlazeModule {
    *
    * @param oldModuleExtensions Module extensions stored in the current lockfile
    */
-  private ImmutableMap<ModuleExtensionId, LockFileModuleExtension> combineModuleExtensions(
-      ImmutableMap<ModuleExtensionId, LockFileModuleExtension> oldModuleExtensions) {
-    ImmutableMap.Builder<ModuleExtensionId, LockFileModuleExtension> updatedExtensionMap =
-        ImmutableMap.builder();
+  private ImmutableMap<LockFileModuleExtensionKey, LockFileModuleExtension> combineModuleExtensions(
+      ImmutableMap<LockFileModuleExtensionKey, LockFileModuleExtension> oldModuleExtensions) {
+    //for each updated extension, a map of its id and keys
+    ImmutableMap<ModuleExtensionId, LockFileModuleExtensionKey> extensionFromEvents =
+        ImmutableMap.copyOf(extensionResolutionEvents.stream()
+            .collect(
+                ImmutableMap.toImmutableMap(
+                    e -> e.getExtensionKey().getExtensionId(),
+                    ModuleExtensionResolutionEvent::getExtensionKey
+                )
+            ));
 
-    // This event being null means that no changes occurred to the usages of the stored extensions,
-    // hence no changes to any module resulted in re-running resolution. So we can just add all the
-    // old stored extensions. Otherwise, check the usage of each one.
-    if (moduleResolutionEvent == null) {
-      updatedExtensionMap.putAll(oldModuleExtensions);
-    } else {
-      // Add the old extensions (stored in the lockfile) only if it still has a usage somewhere
-      for (Map.Entry<ModuleExtensionId, LockFileModuleExtension> extensionEntry :
-          oldModuleExtensions.entrySet()) {
-        if (moduleResolutionEvent.getExtensionUsagesById().containsRow(extensionEntry.getKey())) {
-          updatedExtensionMap.put(extensionEntry);
-        }
+    ImmutableMap.Builder<LockFileModuleExtensionKey, LockFileModuleExtension> updatedExtensionMap =
+        ImmutableMap.builder();
+    for (Map.Entry<LockFileModuleExtensionKey, LockFileModuleExtension> extensionEntry :
+        oldModuleExtensions.entrySet()) {
+      LockFileModuleExtensionKey key = extensionEntry.getKey();
+      if (shouldKeepExtension(key, extensionFromEvents.get(key.getExtensionId()))) {
+        updatedExtensionMap.put(extensionEntry);
       }
     }
 
     // Add the new resolved extensions
     for (ModuleExtensionResolutionEvent extensionEvent : extensionResolutionEvents) {
-      updatedExtensionMap.put(extensionEvent.getExtensionId(), extensionEvent.getModuleExtension());
+      updatedExtensionMap.put(extensionEvent.getExtensionKey(), extensionEvent.getModuleExtension());
     }
     return updatedExtensionMap.buildKeepingLast();
+  }
+
+  /**
+   * Decide whether to keep this extension or not depending on both: 1. If it is still has a usage
+   * in the module 2. If its attributes OS & arch didn't change
+   *
+   * @param lockedExtensionKey object holding the old extension id and state of os and arch
+   * @param updatedExtensionKey object holding the updated extension id and state of os and arch,
+   * its value is Null if the extension was not updated
+   * @return True if this extension should still be in lockfile, false otherwise
+   */
+  private boolean shouldKeepExtension(LockFileModuleExtensionKey lockedExtensionKey,
+      LockFileModuleExtensionKey updatedExtensionKey) {
+    //If updatedExtensionKey is null, then this extension was not updated, no need to check it
+    if(updatedExtensionKey != null) {
+      boolean dependencyOnOsChanged =
+          lockedExtensionKey.getOs().isEmpty() != updatedExtensionKey.getOs().isEmpty();
+      boolean dependencyOnArchChanged =
+          lockedExtensionKey.getArch().isEmpty() != updatedExtensionKey.getArch().isEmpty();
+      if(dependencyOnOsChanged || dependencyOnArchChanged){
+        return false;
+      }
+    }
+    //If moduleResolutionEvent is null, then no usage has changed. So we don't need this check
+    if(moduleResolutionEvent != null) {
+      return moduleResolutionEvent.getExtensionUsagesById().containsRow(lockedExtensionKey.getExtensionId());
+    }
+    return true;
   }
 
   /**

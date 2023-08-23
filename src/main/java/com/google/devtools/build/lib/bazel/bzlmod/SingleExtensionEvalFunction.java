@@ -45,6 +45,8 @@ import com.google.devtools.build.lib.skyframe.BzlLoadFunction;
 import com.google.devtools.build.lib.skyframe.BzlLoadFunction.BzlLoadFailedException;
 import com.google.devtools.build.lib.skyframe.BzlLoadValue;
 import com.google.devtools.build.lib.skyframe.PrecomputedValue;
+import com.google.devtools.build.lib.util.OS;
+import com.google.devtools.build.lib.util.ResourceUsage;
 import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.lib.vfs.RootedPath;
 import com.google.devtools.build.skyframe.SkyFunction;
@@ -165,6 +167,9 @@ public class SingleExtensionEvalFunction implements SkyFunction {
 
     // Check the lockfile first for that module extension
     LockfileMode lockfileMode = BazelLockFileFunction.LOCKFILE_MODE.get(env);
+    LockFileModuleExtensionKey extensionKey = LockFileModuleExtensionKey.create(
+        extensionId, extension.getUseOs()? ResourceUsage.getOsName() : "",
+        extension.getUseArch()? ResourceUsage.getOsArchitecture() : "");
     if (!lockfileMode.equals(LockfileMode.OFF)) {
       BazelLockFileValue lockfile = (BazelLockFileValue) env.getValue(BazelLockFileValue.KEY);
       if (lockfile == null) {
@@ -173,11 +178,10 @@ public class SingleExtensionEvalFunction implements SkyFunction {
       SingleExtensionEvalValue singleExtensionEvalValue =
           tryGettingValueFromLockFile(
               env,
-              extensionId,
+              extensionKey,
               extensionEnvVars,
               usagesValue,
               bzlTransitiveDigest,
-              lockfileMode,
               lockfile);
       if (singleExtensionEvalValue != null) {
         return singleExtensionEvalValue;
@@ -205,7 +209,7 @@ public class SingleExtensionEvalFunction implements SkyFunction {
       env.getListener()
           .post(
               ModuleExtensionResolutionEvent.create(
-                  extensionId,
+                  extensionKey,
                   LockFileModuleExtension.builder()
                       .setBzlTransitiveDigest(bzlTransitiveDigest)
                       .setAccumulatedFileDigests(moduleExtensionResult.getAccumulatedFileDigests())
@@ -221,21 +225,22 @@ public class SingleExtensionEvalFunction implements SkyFunction {
   @Nullable
   private SingleExtensionEvalValue tryGettingValueFromLockFile(
       Environment env,
-      ModuleExtensionId extensionId,
+      LockFileModuleExtensionKey extensionKey,
       ImmutableMap<String, String> envVariables,
       SingleExtensionUsagesValue usagesValue,
       byte[] bzlTransitiveDigest,
-      LockfileMode lockfileMode,
       BazelLockFileValue lockfile)
       throws SingleExtensionEvalFunctionException, InterruptedException {
-    LockFileModuleExtension lockedExtension = lockfile.getModuleExtensions().get(extensionId);
+    LockfileMode lockfileMode = BazelLockFileFunction.LOCKFILE_MODE.get(env);
+    LockFileModuleExtension lockedExtension = lockfile.getModuleExtensions().get(extensionKey);
+
     if (lockedExtension == null) {
       if (lockfileMode.equals(LockfileMode.ERROR)) {
         throw new SingleExtensionEvalFunctionException(
             ExternalDepsException.withMessage(
                 Code.BAD_MODULE,
                 "The module extension '%s' does not exist in the lockfile",
-                extensionId),
+                extensionKey.getExtensionId()),
             Transience.PERSISTENT);
       }
       return null;
@@ -247,7 +252,7 @@ public class SingleExtensionEvalFunction implements SkyFunction {
       // BazelLockFileValue, without adding it to the json file
       ImmutableTable<ModuleExtensionId, ModuleKey, ModuleExtensionUsage> extensionUsagesById =
           BazelDepGraphFunction.getExtensionUsagesById(lockfile.getModuleDepGraph());
-      lockedExtensionUsages = extensionUsagesById.row(extensionId);
+      lockedExtensionUsages = extensionUsagesById.row(extensionKey.getExtensionId());
     } catch (ExternalDepsException e) {
       throw new SingleExtensionEvalFunctionException(e, Transience.PERSISTENT);
     }
@@ -270,13 +275,13 @@ public class SingleExtensionEvalFunction implements SkyFunction {
       return validateAndCreateSingleExtensionEvalValue(
           lockedExtension.getGeneratedRepoSpecs(),
           lockedExtension.getModuleExtensionMetadata(),
-          extensionId,
+          extensionKey.getExtensionId(),
           usagesValue,
           env);
     } else if (lockfileMode.equals(LockfileMode.ERROR)) {
       ImmutableList<String> extDiff =
           lockfile.getModuleExtensionDiff(
-              extensionId,
+              extensionKey,
               bzlTransitiveDigest,
               filesChanged,
               envVariables,
@@ -480,7 +485,7 @@ public class SingleExtensionEvalFunction implements SkyFunction {
             directories,
             env.getListener());
     ModuleExtensionContext moduleContext;
-    Optional<ModuleExtensionMetadata> moduleExtensionMetadata;
+    Optional<ModuleExtensionMetadata> moduleExtensionMetadata = Optional.empty();
     try (Mutability mu =
         Mutability.create("module extension", usagesValue.getExtensionUniqueName())) {
       StarlarkThread thread = new StarlarkThread(mu, starlarkSemantics);
@@ -503,8 +508,6 @@ public class SingleExtensionEvalFunction implements SkyFunction {
         }
         if (returnValue instanceof ModuleExtensionMetadata) {
           moduleExtensionMetadata = Optional.of((ModuleExtensionMetadata) returnValue);
-        } else {
-          moduleExtensionMetadata = Optional.empty();
         }
       } catch (NeedsSkyframeRestartException e) {
         // Clean up and restart by returning null.

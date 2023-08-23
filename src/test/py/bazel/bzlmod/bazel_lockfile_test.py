@@ -283,6 +283,8 @@ class BazelLockfileTest(test_base.TestBase):
             '    implementation=_module_ext_impl,',
             '    tag_classes={"dep": _dep},',
             '    environ=["GREEN_TREES", "NOT_SET"],',
+            '    use_os=True,',
+            '    use_arch=True,',
             ')',
         ],
     )
@@ -339,11 +341,11 @@ class BazelLockfileTest(test_base.TestBase):
     with open(self.Path('MODULE.bazel.lock'), 'r') as f:
       lockfile = json.loads(f.read().strip())
       self.assertIn(
-          '//:extension.bzl%lockfile_ext%<root>~lockfile_ext_1',
+          '//:extension.bzl%lockfile_ext%<root>~lockfile_ext_1%%',
           lockfile['moduleExtensions'],
       )
       self.assertIn(
-          '//:extension.bzl%lockfile_ext', lockfile['moduleExtensions']
+          '//:extension.bzl%lockfile_ext%%%', lockfile['moduleExtensions']
       )
 
     # Verify that the build succeeds using the lockfile.
@@ -386,11 +388,11 @@ class BazelLockfileTest(test_base.TestBase):
     with open(self.Path('MODULE.bazel.lock'), 'r') as f:
       lockfile = json.loads(f.read().strip())
       self.assertIn(
-          '//:extension.bzl%lockfile_ext%<root>~lockfile_ext',
+          '//:extension.bzl%lockfile_ext%<root>~lockfile_ext%%',
           lockfile['moduleExtensions'],
       )
       self.assertNotIn(
-          '//:extension.bzl%lockfile_ext', lockfile['moduleExtensions']
+          '//:extension.bzl%lockfile_ext%%%', lockfile['moduleExtensions']
       )
 
     # Verify that the build succeeds using the lockfile.
@@ -410,11 +412,11 @@ class BazelLockfileTest(test_base.TestBase):
     with open(self.Path('MODULE.bazel.lock'), 'r') as f:
       lockfile = json.loads(f.read().strip())
       self.assertNotIn(
-          '//:extension.bzl%lockfile_ext%<root>~lockfile_ext',
+          '//:extension.bzl%lockfile_ext%<root>~lockfile_ext%%',
           lockfile['moduleExtensions'],
       )
       self.assertIn(
-          '//:extension.bzl%lockfile_ext', lockfile['moduleExtensions']
+          '//:extension.bzl%lockfile_ext%%%', lockfile['moduleExtensions']
       )
 
     # Verify that the build succeeds using the lockfile.
@@ -458,7 +460,7 @@ class BazelLockfileTest(test_base.TestBase):
       self.assertGreater(len(lockfile['moduleDepGraph']), 0)
       self.assertEqual(
           list(lockfile['moduleExtensions'].keys()),
-          ['//:extension.bzl%extA', '//:extension.bzl%extB'],
+          ['//:extension.bzl%extA%%%', '//:extension.bzl%extB%%%'],
       )
 
   def testUpdateModuleExtension(self):
@@ -487,9 +489,8 @@ class BazelLockfileTest(test_base.TestBase):
     self.assertIn('Hello from the other side!', ''.join(stderr))
     with open(self.Path('MODULE.bazel.lock'), 'r') as f:
       lockfile = json.loads(f.read().strip())
-      old_impl = lockfile['moduleExtensions']['//:extension.bzl%lockfile_ext'][
-          'bzlTransitiveDigest'
-      ]
+      old_impl = lockfile['moduleExtensions'][
+        '//:extension.bzl%lockfile_ext%%%']['bzlTransitiveDigest']
 
     # Run again to make sure the resolution value is cached. So even if module
     # resolution doesn't rerun (its event is null), the lockfile is still
@@ -515,9 +516,8 @@ class BazelLockfileTest(test_base.TestBase):
     self.assertIn('Hello from the other town!', ''.join(stderr))
     with open(self.Path('MODULE.bazel.lock'), 'r') as f:
       lockfile = json.loads(f.read().strip())
-      new_impl = lockfile['moduleExtensions']['//:extension.bzl%lockfile_ext'][
-          'bzlTransitiveDigest'
-      ]
+      new_impl = lockfile['moduleExtensions'][
+        '//:extension.bzl%lockfile_ext%%%']['bzlTransitiveDigest']
       self.assertNotEqual(new_impl, old_impl)
 
   def testUpdateModuleExtensionErrorMode(self):
@@ -605,7 +605,7 @@ class BazelLockfileTest(test_base.TestBase):
     with open(self.Path('MODULE.bazel.lock'), 'r') as f:
       lockfile = json.loads(f.read().strip())
       self.assertEqual(
-          list(lockfile['moduleExtensions'].keys()), ['//:extension.bzl%ext']
+          list(lockfile['moduleExtensions'].keys()), ['//:extension.bzl%ext%%%']
       )
 
     self.ScratchFile('MODULE.bazel', [])
@@ -813,8 +813,9 @@ class BazelLockfileTest(test_base.TestBase):
     # Set version to old
     with open('MODULE.bazel.lock', 'r') as json_file:
       data = json.load(json_file)
-    data['lockFileVersion'] = 0
+      version = data['lockFileVersion']
     with open('MODULE.bazel.lock', 'w') as json_file:
+      data['lockFileVersion'] = version - 1
       json.dump(data, json_file, indent=4)
 
     # Run in error mode
@@ -837,12 +838,9 @@ class BazelLockfileTest(test_base.TestBase):
     self.RunBazel(['build', '--nobuild', '//:all'])
     with open('MODULE.bazel.lock', 'r') as json_file:
       data = json.load(json_file)
-    self.assertEqual(data['lockFileVersion'], 1)
+    self.assertEqual(data['lockFileVersion'], version)
 
   def testExtensionEvaluationDoesNotRerunOnChangedImports(self):
-    """
-
-    """
     self.ScratchFile(
         'MODULE.bazel',
         [
@@ -963,6 +961,86 @@ class BazelLockfileTest(test_base.TestBase):
         ' not generate repository "invalid_dep"',
         stderr,
     )
+
+  def testExtensionOsAndArch(self):
+    self.ScratchFile(
+      'MODULE.bazel',
+      [
+        'lockfile_ext = use_extension("extension.bzl", "lockfile_ext")',
+        'use_repo(lockfile_ext, "hello")',
+      ],
+    )
+    self.ScratchFile('BUILD.bazel')
+    self.ScratchFile(
+      'extension.bzl',
+      [
+        'def _repo_rule_impl(ctx):',
+        '    ctx.file("WORKSPACE")',
+        '    ctx.file("BUILD", "filegroup(name=\'lala\')")',
+        'repo_rule = repository_rule(implementation=_repo_rule_impl)',
+        '',
+        'def _module_ext_impl(ctx):',
+        '    repo_rule(name="hello")',
+        'lockfile_ext = module_extension(',
+        '    implementation=_module_ext_impl, use_os=True',
+        ')',
+      ],
+    )
+
+    # build to generate lockfile with this extension
+    _, _, stderr = self.RunBazel(['build', '@hello//:all'])
+
+    # replace key with different arch
+    old_key = "//:extension.bzl%lockfile_ext%%Mac OS X%"
+    new_key = "//:extension.bzl%lockfile_ext%%Win%"
+    with open('MODULE.bazel.lock', 'r') as json_file:
+      lockfile = json.load(json_file)
+      self.assertIn(old_key, lockfile['moduleExtensions'])
+    with open('MODULE.bazel.lock', 'w') as json_file:
+      lockfile["moduleExtensions"][new_key] = \
+        lockfile["moduleExtensions"].pop(old_key)
+      json.dump(lockfile, json_file, indent=4)
+
+    # build again to update the file
+    _, _, stderr = self.RunBazel(['build', '@hello//:all'])
+    # assert both win and mac exists
+    with open('MODULE.bazel.lock', 'r') as json_file:
+      lockfile = json.load(json_file)
+      self.assertIn(old_key, lockfile['moduleExtensions'])
+      self.assertIn(new_key, lockfile['moduleExtensions'])
+
+
+    # update extension to also depend on arch
+    self.ScratchFile(
+      'extension.bzl',
+      [
+        'def _repo_rule_impl(ctx):',
+        '    ctx.file("WORKSPACE")',
+        '    ctx.file("BUILD", "filegroup(name=\'lala\')")',
+        'repo_rule = repository_rule(implementation=_repo_rule_impl)',
+        '',
+        'def _module_ext_impl(ctx):',
+        '    repo_rule(name="hello")',
+        'lockfile_ext = module_extension(',
+        '    implementation=_module_ext_impl, use_os=True, use_arch=True',
+        ')',
+      ],
+    )
+
+    # build again to update the file
+    _, _, stderr = self.RunBazel(['build', '@hello//:all'])
+    # assert both old ones are deleted, and a new one with arch exists
+    with open('MODULE.bazel.lock', 'r') as json_file:
+      lockfile = json.load(json_file)
+      self.assertNotIn(old_key, lockfile['moduleExtensions'])
+      self.assertNotIn(new_key, lockfile['moduleExtensions'])
+      self.assertIn("//:extension.bzl%lockfile_ext%%Mac OS X%aarch64",
+                    lockfile['moduleExtensions'])
+
+
+
+
+
 
 
 if __name__ == '__main__':
