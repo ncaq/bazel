@@ -47,9 +47,9 @@ public abstract class ModuleExtension implements StarlarkValue {
 
   public abstract ImmutableList<String> getEnvVariables();
 
-  public abstract Boolean getUseOS();
+  public abstract boolean getUseOs();
 
-  public abstract Boolean getUseArch();
+  public abstract boolean getUseArch();
 
   public static Builder builder() {
     return new AutoValue_ModuleExtension.Builder();
@@ -70,9 +70,9 @@ public abstract class ModuleExtension implements StarlarkValue {
 
     public abstract Builder setEnvVariables(ImmutableList<String> value);
 
-    public abstract Builder setUseOS(Boolean useOS);
+    public abstract Builder setUseOs(boolean useOs);
 
-    public abstract Builder setUseArch(Boolean useArch);
+    public abstract Builder setUseArch(boolean useArch);
 
     public abstract ModuleExtension build();
   }

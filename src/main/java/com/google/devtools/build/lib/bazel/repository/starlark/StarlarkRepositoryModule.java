@@ -294,8 +294,8 @@ public class StarlarkRepositoryModule implements RepositoryModuleApi {
       Dict<?, ?> tagClasses, // Dict<String, TagClass>
       Object doc, // <String> or Starlark.NONE
       Sequence<?> environ, // <String>
-      Boolean useOS,
-      Boolean useArch,
+      boolean useOs,
+      boolean useArch,
       StarlarkThread thread)
       throws EvalException {
     return ModuleExtension.builder()
@@ -307,7 +307,7 @@ public class StarlarkRepositoryModule implements RepositoryModuleApi {
             BzlInitThreadContext.fromOrFail(thread, "module_extension()").getBzlFile())
         .setEnvVariables(ImmutableList.copyOf(Sequence.cast(environ, String.class, "environ")))
         .setLocation(thread.getCallerLocation())
-        .setUseOS(useOS)
+        .setUseOs(useOs)
         .setUseArch(useArch)
         .build();
   }

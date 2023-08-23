@@ -192,8 +192,8 @@ public interface RepositoryModuleApi {
       Dict<?, ?> tagClasses, // Dict<String, TagClassApi>
       Object doc, // <String> or Starlark.NONE
       Sequence<?> environ, // <String>
-      Boolean useOS,
-      Boolean useArch,
+      boolean useOs,
+      boolean useArch,
       StarlarkThread thread)
       throws EvalException;
 
